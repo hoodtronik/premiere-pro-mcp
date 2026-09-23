@@ -78,8 +78,16 @@ export function getTrackTools(bridgeOptions: BridgeOptions) {
             if (!qeSeq || typeof qeSeq.addTracks !== "function") {
               return __error("Could not add ${args.track_type} track(s): " + publicFailure + ". QE addTracks is unavailable on this Premiere build.");
             }
+            // CLAUDE-NOTE (2026-09-23, measured on Premiere Pro 2026 / 26.x): QE addTracks is POSITIONAL —
+            //   addTracks(numVideo, videoInsertAfterIndex, numAudio, audioTrackType, audioInsertAfterIndex).
+            //   The old call addTracks(v, a, 0, 0) read the second arg as the video insert index and asked for ZERO audio
+            //   tracks (audio adds silently no-op'd), and inserted video after index 0 (new track landed at the
+            //   BOTTOM, shifting V1). Pass numTracks (NOT numTracks-1): measured, the "insert after" arg behaves as an insert-AT position, so N-1 slid the top track up. numTracks appends on top and no existing
+            //   track moves. audioTrackType 0 = accepts stereo clips (verified); 1 = mono (rejects stereo, verified).
+            var vAfter = seq.videoTracks.numTracks;
+            var aAfter = seq.audioTracks.numTracks;
             try {
-              qeSeq.addTracks(${isVideo ? count : 0}, ${isVideo ? 0 : count}, 0, 0);
+              qeSeq.addTracks(${isVideo ? count : 0}, vAfter, ${isVideo ? 0 : count}, 0, aAfter);
             } catch (qeError) {
               return __error("Could not add ${args.track_type} track(s): public DOM failed (" + publicFailure + ") and QE addTracks failed (" + qeError.toString() + ").");
             }

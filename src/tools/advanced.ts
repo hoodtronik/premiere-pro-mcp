@@ -1019,6 +1019,12 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
         if (v + a + aMono + a51 === 0) {
           return { success: false, error: "Request at least one video or audio track" };
         }
+        // CLAUDE-NOTE (2026-09-23): the QE audioTrackType value for a true 5.1 track is UNVERIFIED on 26.x
+        //   (types 2 and 3 both accepted a stereo clip, which a 5.1 track would refuse). Refuse rather than
+        //   silently create the wrong kind of track.
+        if (a51 > 0) {
+          return { success: false, error: "audio_51_tracks is not supported: the QE track-type value for 5.1 is unverified on this Premiere build. Add stereo or mono tracks instead." };
+        }
 
         const script = buildToolScript(`
           var seq = app.project.activeSequence;
@@ -1037,8 +1043,16 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
           if (!qeSeq) return __error("No active sequence (QE)");
           if (typeof qeSeq.addTracks !== "function") return __error("QE addTracks is unavailable on this Premiere build.");
 
+          // CLAUDE-NOTE (2026-09-23, measured on Premiere Pro 2026 / 26.x): QE addTracks is POSITIONAL —
+          //   addTracks(numVideo, videoInsertAfterIndex, numAudio, audioTrackType, audioInsertAfterIndex).
+          //   The old addTracks(v, a, aMono, a51) call read the second arg as an insert INDEX, so audio requests added
+          //   nothing and video landed after index 0 (bottom). One call per track kind, each inserted after the
+          //   current track COUNT (the arg behaves as insert-AT; numTracks-1 measured to slide the top track up) so tracks append on top and no existing track shifts.
+          //   audioTrackType 0 = accepts stereo clips (verified); 1 = mono (rejects a stereo clip, verified).
           try {
-            qeSeq.addTracks(${v}, ${a}, ${aMono}, ${a51});
+            if (${v} > 0) qeSeq.addTracks(${v}, seq.videoTracks.numTracks, 0, 0, 0);
+            if (${a} > 0) qeSeq.addTracks(0, 0, ${a}, 0, seq.audioTracks.numTracks);
+            if (${aMono} > 0) qeSeq.addTracks(0, 0, ${aMono}, 1, seq.audioTracks.numTracks);
           } catch (addTracksError) {
             return __error("QE addTracks failed: " + addTracksError.toString());
           }

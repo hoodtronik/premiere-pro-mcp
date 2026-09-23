@@ -317,7 +317,7 @@ Publish `premiere-pro-mcp@1.2.0` from `main` with a current npm authenticator OT
 |--------|-------------|:---:|
 | `qeSeq.getVideoTrackAt(idx)` | Get video track | ✅ |
 | `qeSeq.getAudioTrackAt(idx)` | Get audio track | ✅ |
-| `qeSeq.addTracks(vNum, aNum, aMono, a5_1, aAdaptive)` | Add tracks | ✅ |
+| `qeSeq.addTracks(nVideo, videoInsertAt, nAudio, audioType, audioInsertAt)` | Add tracks — POSITIONAL (measured 26.x, 2026-09-23). Insert index behaves as insert-AT: pass numTracks to append on top. audioType 0 = stereo-capable, 1 = mono; 5.1 value unverified | ✅ |
 | `qeSeq.removeTracks(vIdx, aIdx, aMonoIdx, a5_1Idx)` | Remove tracks | ❌ |
 
 ### QE Track Item (Clip) — **THE MOST POWERFUL PART**

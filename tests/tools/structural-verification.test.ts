@@ -306,7 +306,11 @@ describe("track creation verification", () => {
 
     expect(script).toContain('typeof seq.insertAudioTrackAt !== "function"');
     expect(script).toContain("afterPublic !== expected && afterPublic !== before");
-    expect(script).toContain("qeSeq.addTracks(0, 2, 0, 0)");
+    // QE addTracks is positional (numVideo, videoAfter, numAudio, audioType, audioAfter): audio must be the
+    // THIRD argument and inserted after the last existing track, never the old (0, 2, 0, 0) no-op.
+    expect(script).toContain("var aAfter = seq.audioTracks.numTracks");
+    expect(script).toContain("qeSeq.addTracks(0, vAfter, 2, 0, aAfter)");
+    expect(script).not.toContain("qeSeq.addTracks(0, 2, 0, 0)");
     expect(script).toContain("if (after !== expected)");
     expect(script).toContain("verified: true");
   });
@@ -316,15 +320,26 @@ describe("track creation verification", () => {
       video_tracks: 1,
       audio_tracks: 2,
       audio_mono_tracks: 1,
-      audio_51_tracks: 1,
     });
     const script = mockedSendCommand.mock.calls[0][0];
 
     expect(script).toContain("var beforeVideo = seq.videoTracks.numTracks");
-    expect(script).toContain("var expectedAudio = beforeAudio + 4");
+    expect(script).toContain("var expectedAudio = beforeAudio + 3");
     expect(script).toContain("typeof qeSeq.addTracks !== \"function\"");
+    // one positional call per track kind, each appended after the current last track
+    expect(script).toContain("qeSeq.addTracks(1, seq.videoTracks.numTracks, 0, 0, 0)");
+    expect(script).toContain("qeSeq.addTracks(0, 0, 2, 0, seq.audioTracks.numTracks)");
+    expect(script).toContain("qeSeq.addTracks(0, 0, 1, 1, seq.audioTracks.numTracks)");
     expect(script).toContain("afterVideo !== expectedVideo || afterAudio !== expectedAudio");
     expect(script).toContain("verified: true");
+  });
+
+  it("refuses 5.1 audio tracks locally because the QE track type is unverified", async () => {
+    const result = await advanced.add_tracks.handler({ audio_51_tracks: 1 });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("5.1");
+    expect(mockedSendCommand).not.toHaveBeenCalled();
   });
 
   it("rejects an empty add_tracks request locally rather than returning a successful no-op", async () => {
