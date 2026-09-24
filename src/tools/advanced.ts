@@ -503,7 +503,7 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
     },
 
     rename_clip: {
-      description: "Rename a clip on the timeline. Uses QE DOM.",
+      description: "Rename a clip on the timeline (standard DOM TrackItem.name, gap-safe QE fallback).",
       parameters: {
         type: "object" as const,
         properties: {
@@ -519,23 +519,34 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
         required: ["node_id", "new_name"],
       },
       handler: async (args: { node_id: string; new_name: string }) => {
+        // CLAUDE-NOTE (2026-09-24): the old body did qeTrack.getItemAt(result.clipIndex), but QE counts EMPTY GAPS as
+        // items while __findClip's clipIndex counts clips only — on any track with gaps it renamed a NEIGHBOUR clip and
+        // still reported the target's oldName (measured on SHEOL_MASTER V1: renaming Janus relabelled NoDad). Standard-DOM
+        // TrackItem.name is writable, so set it directly and read it back; QE is only a fallback, matched by the clip's
+        // old NAME (exactly one match) instead of by index.
         const script = buildToolScript(`
+          var newName = "${escapeForExtendScript(args.new_name)}";
+          var result = __findClip("${escapeForExtendScript(args.node_id)}");
+          if (!result) return __error("Clip not found");
+          var oldName = result.clip.name;
+          try { result.clip.name = newName; } catch (e) {}
+          if (result.clip.name === newName) {
+            return __result({ renamed: true, oldName: oldName, newName: newName, method: "dom" });
+          }
           app.enableQE();
           var qeSeq = qe.project.getActiveSequence();
           if (!qeSeq) return __error("No active sequence (QE)");
-          
-          var result = __findClip("${escapeForExtendScript(args.node_id)}");
-          if (!result) return __error("Clip not found");
-          
           var qeTrack = result.trackType === "video"
             ? qeSeq.getVideoTrackAt(result.trackIndex)
             : qeSeq.getAudioTrackAt(result.trackIndex);
-          var qeClip = qeTrack.getItemAt(result.clipIndex);
-          if (!qeClip) return __error("QE clip not found");
-          
-          var oldName = result.clip.name;
-          qeClip.setName("${escapeForExtendScript(args.new_name)}");
-          return __result({ renamed: true, oldName: oldName, newName: "${escapeForExtendScript(args.new_name)}" });
+          var hits = [];
+          for (var i = 0; i < qeTrack.numItems; i++) {
+            var it = qeTrack.getItemAt(i);
+            if (it && it.type !== "Empty" && it.name === oldName) hits.push(it);
+          }
+          if (hits.length !== 1) return __error("QE fallback: " + hits.length + " items named '" + oldName + "' on this track; refusing to guess");
+          hits[0].setName(newName);
+          return __result({ renamed: true, oldName: oldName, newName: newName, method: "qe-by-name" });
         `);
         return sendCommand(script, bridgeOptions);
       },
