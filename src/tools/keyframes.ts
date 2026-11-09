@@ -1,6 +1,43 @@
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { sendCommand, BridgeOptions } from "../bridge/file-bridge.js";
 
+
+// CLAUDE-NOTE (2026-11-09, Dehancer Pro 7.4 in Premiere 26.5): big third-party effects repeat property names (Dehancer: 13x "Enabled",
+// 9x "Profile", 6x "Impact"). Sections are marked by a header property that follows an empty-named separator, so "Section/Name"
+// (e.g. "Film Grain/Amount", "Halation/Profile") names one property exactly; property_index is the fallback. A bare name that matches
+// more than one property is refused with the candidate paths instead of silently writing the first match.
+function effectPropertyPathScript(): string {
+  return `
+          function __propPaths(comp) {
+            var out = []; var section = "";
+            for (var p = 0; p < comp.properties.numItems; p++) {
+              var dn = comp.properties[p].displayName;
+              var prev = p > 0 ? comp.properties[p - 1].displayName : "";
+              if (dn !== "" && (p === 0 || prev === "")) section = dn;
+              out.push({ index: p, name: dn, section: section, path: (section && section !== dn) ? section + "/" + dn : dn });
+            }
+            return out;
+          }
+          function __resolveProp(comp, name, index) {
+            var paths = __propPaths(comp);
+            if (index !== null && index !== undefined && index >= 0) {
+              if (index >= comp.properties.numItems) return { error: "property_index " + index + " out of range (0.." + (comp.properties.numItems - 1) + ")" };
+              return { prop: comp.properties[index], info: paths[index] };
+            }
+            var hits = [];
+            for (var i = 0; i < paths.length; i++) {
+              if (paths[i].path === name || (name.indexOf("/") < 0 && paths[i].name === name)) hits.push(paths[i]);
+            }
+            if (hits.length === 0) return { error: "Property not found: " + name };
+            if (hits.length > 1) {
+              var c = []; for (var h = 0; h < hits.length; h++) c.push(hits[h].path + " [" + hits[h].index + "]");
+              return { error: "Property name \\"" + name + "\\" is ambiguous on this effect; use one of: " + c.join(", ") + " (or property_index)" };
+            }
+            return { prop: comp.properties[hits[0].index], info: hits[0] };
+          }
+  `;
+}
+
 export function getKeyframeTools(bridgeOptions: BridgeOptions) {
   return {
     get_effect_properties: {
@@ -37,12 +74,16 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           
           if (!comp) return __error("Effect not found: " + effectName);
           
+          ${effectPropertyPathScript()}
+          var paths = __propPaths(comp);
           var props = [];
           for (var p = 0; p < comp.properties.numItems; p++) {
             var prop = comp.properties[p];
             var info = {
               index: p,
               displayName: prop.displayName,
+              section: paths[p].section,
+              path: paths[p].path,
               isTimeVarying: false,
               keyframesSupported: false
             };
@@ -77,7 +118,12 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           },
           property_name: {
             type: "string",
-            description: "Display name of the property (e.g., 'Scale', 'Position', 'Opacity')",
+            description: "Display name of the property (e.g., 'Scale', 'Opacity'), or 'Section/Name' when the effect repeats names (e.g. 'Film Grain/Amount'); get_effect_properties lists every path",
+          },
+          property_index: {
+            type: "number",
+            minimum: 0,
+            description: "Optional exact property index from get_effect_properties; overrides property_name",
           },
           value: {
             type: ["number", "string"],
@@ -87,7 +133,7 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
         },
         required: ["node_id", "effect_name", "property_name", "value"],
       },
-      handler: async (args: { node_id: string; effect_name: string; property_name: string; value: number | string }) => {
+      handler: async (args: { node_id: string; effect_name: string; property_name: string; property_index?: number; value: number | string }) => {
         const requestedValue = typeof args.value === "string"
           ? `"${escapeForExtendScript(args.value)}"`
           : String(args.value);
@@ -105,14 +151,10 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           }
           if (!comp) return __error("Effect not found: ${escapeForExtendScript(args.effect_name)}");
           
-          var prop = null;
-          for (var p = 0; p < comp.properties.numItems; p++) {
-            if (comp.properties[p].displayName === "${escapeForExtendScript(args.property_name)}") {
-              prop = comp.properties[p];
-              break;
-            }
-          }
-          if (!prop) return __error("Property not found: ${escapeForExtendScript(args.property_name)}");
+          ${effectPropertyPathScript()}
+          var resolved = __resolveProp(comp, "${escapeForExtendScript(args.property_name)}", ${typeof args.property_index === "number" ? args.property_index : "null"});
+          if (resolved.error) return __error(resolved.error);
+          var prop = resolved.prop;
           
           var requestedValue = ${requestedValue};
           try {
@@ -131,7 +173,8 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           return __result({
             set: true,
             effect: "${escapeForExtendScript(args.effect_name)}",
-            property: "${escapeForExtendScript(args.property_name)}",
+            property: resolved.info.path,
+            propertyIndex: resolved.info.index,
             value: readbackAvailable ? readbackValue : requestedValue,
             requestedValue: requestedValue,
             readbackVerified: readbackAvailable && readbackValue === requestedValue,
