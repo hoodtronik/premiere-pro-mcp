@@ -14,6 +14,7 @@ const READ_ONLY_TOOLS = new Set([
   "verify_delivery_conformance",
   "read_sequence_captions",
   "plan_silence_review_markers",
+  "probe_effect",
 ]);
 const DESTRUCTIVE_PREFIXES = ["delete_", "remove_", "ripple_delete", "close_"];
 const DESTRUCTIVE_TOOLS = new Set(["manage_project_context"]);

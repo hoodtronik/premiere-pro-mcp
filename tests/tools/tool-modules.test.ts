@@ -194,12 +194,12 @@ describe("Tool Module Structure", () => {
 });
 
 describe("Total Tool Count", () => {
-  it("all modules together have 326 tools", () => {
+  it("all modules together have 327 tools", () => {
     let total = 0;
     for (const mod of ALL_MODULES) {
       total += Object.keys(mod.getter(bridgeOptions)).length;
     }
-    expect(total).toBe(326);
+    expect(total).toBe(327);
   });
 
   it("there are 38 directly enumerated modules", () => {

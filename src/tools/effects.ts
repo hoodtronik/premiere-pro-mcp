@@ -1,10 +1,32 @@
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { sendCommand, BridgeOptions } from "../bridge/file-bridge.js";
+import { resolveEffectDisplayName } from "./effect-resolve.js";
+
+// Shared QE lookup: exact by-name probe, then a spacing/case-insensitive catalog scan. Leaves qeEffect, effectName, lookupSource defined.
+function qeVideoEffectLookup(displayName: string): string {
+  return `
+          app.enableQE();
+          var effectName = "${escapeForExtendScript(displayName)}";
+          var qeEffect = null;
+          try { qeEffect = qe.project.getVideoEffectByName(effectName); } catch (byNameError) {}
+          var lookupSource = qeEffect ? "qe.byName" : "qe.catalog";
+          if (!qeEffect) {
+            var effectCatalog = __getQeEffectCatalog("video");
+            if (!effectCatalog.ok) return __error(effectCatalog.error + " Direct QE lookup for \\"" + effectName + "\\" also did not resolve an effect.");
+            var wanted = effectName.replace(/\\s+/g, " ").toLowerCase();
+            for (var i = 0; i < effectCatalog.effects.numItems; i++) {
+              var cand = effectCatalog.effects[i];
+              if (cand.name === effectName || String(cand.name).replace(/\\s+/g, " ").toLowerCase() === wanted) { qeEffect = cand; effectName = cand.name; break; }
+            }
+          }
+          if (!qeEffect) return __error("Effect not found: " + effectName);
+  `;
+}
 
 export function getEffectsTools(bridgeOptions: BridgeOptions) {
   return {
     apply_effect: {
-      description: "Apply a video effect to a clip. Uses QE DOM catalog lookup, with an exact-name QE probe when Premiere's catalog enumeration is empty.",
+      description: "Apply a video effect to a clip. effect_name may be the display name (spacing-insensitive) or the effect matchName (e.g. 'AE.Dehancer v7'); third-party names are resolved from Premiere's plugin cache. Uses QE lookup by name, then the QE catalog, and verifies the effect was added via the standard DOM.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -14,51 +36,49 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           },
           effect_name: {
             type: "string",
-            description: "Name of the effect (e.g., 'Gaussian Blur', 'Lumetri Color')",
+            description: "Effect display name (e.g. 'Gaussian Blur') or matchName (e.g. 'AE.Dehancer v7')",
           },
         },
         required: ["node_id", "effect_name"],
       },
       handler: async (args: { node_id: string; effect_name: string }) => {
+        const resolved = await resolveEffectDisplayName(args.effect_name);
         const script = buildToolScript(`
-          app.enableQE();
-          var qeSeq = qe.project.getActiveSequence();
-          if (!qeSeq) return __error("No active sequence (QE)");
-          
+          ${qeVideoEffectLookup(resolved.name)}
           var result = __findClip("${escapeForExtendScript(args.node_id)}");
           if (!result) return __error("Clip not found: ${escapeForExtendScript(args.node_id)}");
-          
-          // Find the effect in QE
-          var effectName = "${escapeForExtendScript(args.effect_name)}";
-          var qeTrack = result.trackType === "video" 
-            ? qeSeq.getVideoTrackAt(result.trackIndex)
-            : qeSeq.getAudioTrackAt(result.trackIndex);
-          
+          var qeSeq = qe.project.getActiveSequence();
+          if (!qeSeq) return __error("No active sequence (QE)");
+          var qeTrack = result.trackType === "video" ? qeSeq.getVideoTrackAt(result.trackIndex) : qeSeq.getAudioTrackAt(result.trackIndex);
           if (!qeTrack) return __error("QE track not found");
-          
           var qeClip = qeTrack.getItemAt(result.clipIndex);
           if (!qeClip) return __error("QE clip not found");
-          
-          // Premiere 26 can expose direct by-name lookup while returning an
-          // empty QE catalog. Probe the requested name before consulting the
-          // catalog so a known installed effect remains usable.
-          var qeEffect = null;
-          try { qeEffect = qe.project.getVideoEffectByName(effectName); } catch (byNameError) {}
-          var lookupSource = qeEffect ? "qe.byName" : "qe.catalog";
-          if (!qeEffect) {
-            var effectCatalog = __getQeEffectCatalog("video");
-            if (!effectCatalog.ok) return __error(effectCatalog.error + " Direct QE lookup for \"" + effectName + "\" also did not resolve an effect.");
-            var effects = effectCatalog.effects;
-            for (var i = 0; i < effects.numItems; i++) {
-              if (effects[i].name === effectName) {
-                qeEffect = effects[i];
-                break;
-              }
-            }
-          }
-          if (!qeEffect) return __error("Effect not found: " + effectName);
+          var before = result.clip.components.numItems;
           qeClip.addVideoEffect(qeEffect);
-          return __result({ applied: true, effect: effectName, lookupSource: lookupSource, clipName: result.clip.name });
+          var after = result.clip.components.numItems;
+          var lastName = after > 0 ? result.clip.components[after - 1].displayName : "";
+          var lastMatch = after > 0 ? result.clip.components[after - 1].matchName : "";
+          if (after <= before) return __error("Premiere accepted addVideoEffect for \\"" + effectName + "\\" but the clip's component count did not grow (" + before + " -> " + after + ").");
+          return __result({ applied: true, verified: true, effect: effectName, requested: "${escapeForExtendScript(args.effect_name)}", resolvedVia: "${escapeForExtendScript(resolved.via)}", lookupSource: lookupSource, componentsBefore: before, componentsAfter: after, addedDisplayName: lastName, addedMatchName: lastMatch, clipName: result.clip.name });
+        `);
+        return sendCommand(script, bridgeOptions);
+      },
+    },
+
+    probe_effect: {
+      description: "Read-only: check whether Premiere's QE layer can resolve a video effect (display name or matchName, e.g. 'AE.Dehancer v7') WITHOUT applying it. Reports the resolved display name, lookup path and catalog size. Use it to tell a lookup failure from an apply failure.",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          effect_name: { type: "string", description: "Effect display name or matchName" },
+        },
+        required: ["effect_name"],
+      },
+      handler: async (args: { effect_name: string }) => {
+        const resolved = await resolveEffectDisplayName(args.effect_name);
+        const script = buildToolScript(`
+          ${qeVideoEffectLookup(resolved.name)}
+          return __result({ found: true, effect: effectName, requested: "${escapeForExtendScript(args.effect_name)}", resolvedVia: "${escapeForExtendScript(resolved.via)}", matchName: "${escapeForExtendScript(resolved.matchName ?? "")}", lookupSource: lookupSource, qeEffectName: (qeEffect && qeEffect.name) ? String(qeEffect.name) : "" });
         `);
         return sendCommand(script, bridgeOptions);
       },
