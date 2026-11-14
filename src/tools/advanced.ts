@@ -628,6 +628,69 @@ export function getAdvancedTools(bridgeOptions: BridgeOptions) {
       },
     },
 
+    // CLAUDE-NOTE (2026-11-14, Finding Eli v2.1 stems): FCP XML import drops <link> groups between a video clip and
+    // audio from OTHER files, and linking 147 shots via set_clip_selection + link_selection is ~1,000 calls. This links
+    // every video clip on one track to the audio clips (on the listed tracks) that share its exact start/end, in one call,
+    // and reads the links back.
+    link_clips_by_start: {
+      description:
+        "In the active sequence, link each clip on a video track to the audio clips on the given audio tracks that start and end at the same time (one link group per video clip). Returns how many groups were linked and verified.",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          video_track_index: { type: "number", description: "Video track index (0-based, default 0)" },
+          audio_track_indices: {
+            type: "array",
+            items: { type: "number" },
+            description: "Audio track indices (0-based) whose time-matched clips join each video clip's link group",
+          },
+          tolerance_seconds: { type: "number", description: "Start/end match tolerance in seconds (default 0.02)" },
+        },
+        required: ["audio_track_indices"],
+      },
+      handler: async (args: { video_track_index?: number; audio_track_indices: number[]; tolerance_seconds?: number }) => {
+        const vIdx = Math.max(0, Math.floor(args.video_track_index ?? 0));
+        const aIdx = (args.audio_track_indices || []).map((n) => Math.max(0, Math.floor(n)));
+        const tol = args.tolerance_seconds ?? 0.02;
+        const script = buildToolScript(`
+          var seq = app.project.activeSequence;
+          if (!seq) return __error("No active sequence");
+          var aIdx = [${aIdx.join(",")}];
+          var tol = ${tol};
+          if (${vIdx} >= seq.videoTracks.numTracks) return __error("video track out of range");
+          for (var q = 0; q < aIdx.length; q++) { if (aIdx[q] >= seq.audioTracks.numTracks) return __error("audio track out of range: " + aIdx[q]); }
+          function deselectAll() {
+            var t, c;
+            for (t = 0; t < seq.videoTracks.numTracks; t++) for (c = 0; c < seq.videoTracks[t].clips.numItems; c++) seq.videoTracks[t].clips[c].setSelected(0, true);
+            for (t = 0; t < seq.audioTracks.numTracks; t++) for (c = 0; c < seq.audioTracks[t].clips.numItems; c++) seq.audioTracks[t].clips[c].setSelected(0, true);
+          }
+          var vt = seq.videoTracks[${vIdx}];
+          var groups = 0, verified = 0, unmatched = [];
+          for (var i = 0; i < vt.clips.numItems; i++) {
+            var v = vt.clips[i];
+            var s = v.start.seconds, e = v.end.seconds, want = 0;
+            deselectAll();
+            v.setSelected(1, true);
+            for (var k = 0; k < aIdx.length; k++) {
+              var at = seq.audioTracks[aIdx[k]];
+              for (var j = 0; j < at.clips.numItems; j++) {
+                var a = at.clips[j];
+                if (Math.abs(a.start.seconds - s) <= tol && Math.abs(a.end.seconds - e) <= tol) { a.setSelected(1, true); want++; }
+              }
+            }
+            if (want === 0) { unmatched.push(v.name); continue; }
+            seq.linkSelection();
+            groups++;
+            var li = v.getLinkedItems();
+            if (li && li.numItems >= want + 1) verified++;
+          }
+          deselectAll();
+          return __result({ videoClips: vt.clips.numItems, linkedGroups: groups, verified: verified, unmatched: unmatched });
+        `);
+        return sendCommand(script, bridgeOptions);
+      },
+    },
+
     unlink_selection: {
       description:
         "Unlink the currently selected video and audio clips in the active sequence",
