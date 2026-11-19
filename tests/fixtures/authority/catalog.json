@@ -2470,6 +2470,13 @@
     ]
   },
   {
+    "tool": "link_clips_by_start",
+    "args": {},
+    "required": [
+      "edit"
+    ]
+  },
+  {
     "tool": "list_available_audio_effects",
     "args": {},
     "required": [
@@ -4030,6 +4037,13 @@
   },
   {
     "tool": "preview_product_spot",
+    "args": {},
+    "required": [
+      "inspect"
+    ]
+  },
+  {
+    "tool": "probe_effect",
     "args": {},
     "required": [
       "inspect"

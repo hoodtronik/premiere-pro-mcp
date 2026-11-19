@@ -102,11 +102,14 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           if (!comp) return __refuse("Effect not found: " + effectName);
           
           var props = [];
+          var propertyPaths = __propertyPaths(comp);
           for (var p = 0; p < comp.properties.numItems; p++) {
             var prop = comp.properties[p];
             var info = {
               index: p,
               displayName: prop.displayName,
+              section: propertyPaths[p].section,
+              path: propertyPaths[p].path,
               isTimeVarying: false,
               keyframesSupported: false
             };
@@ -155,7 +158,7 @@ export function getKeyframeTools(bridgeOptions: BridgeOptions) {
           },
           property_name: {
             type: "string",
-            description: "Display name of the property; duplicate names require property_index.",
+            description: "Display name of the property, or a 'Section/Name' path from get_effect_properties when the effect repeats names (e.g. 'Film Grain/Amount'); otherwise duplicate names require property_index.",
           },
           property_index: propertyIndexParameter(),
           value: {

@@ -211,3 +211,7 @@ Read and follow these skills when you need the full rules, an edge case, or a le
 10. Use normal sentences for security warnings, irreversible confirmations, and steps whose order would be ambiguous as fragments. Explain in full when asked to explain. Confirm before destructive actions. After three failed fixes, name the doubtful assumption and ask one question.
 
 Off switches: `stop caveman` turns wording off. `stop adhd mode` turns the shape off. `normal mode` turns both off. Confirm in one line, then drop that style. `/caveman lite|full|ultra` changes caveman intensity for the rest of the session.
+
+## CLAUDE-NOTE convention (hoodtronik fork)
+
+Claude Code changes marked with `CLAUDE-NOTE:` (or equivalent comment syntax) are the source of truth. Non-Claude-Code agents must not modify, remove, or alter code marked with a CLAUDE-NOTE without first alerting the user and receiving explicit permission. Fork-specific changes are listed in `FORK_NOTES.md`.

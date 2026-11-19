@@ -57,6 +57,7 @@ export const UNSAFE_TOOL_NAMES = new Set(["execute_extendscript", "send_raw_scri
 
 const INSPECT_TOOL_NAMES = new Set([
   "ping",
+  "probe_effect",
   "can_execute",
   "get_operation_performance",
   "inspect_workflow_job",

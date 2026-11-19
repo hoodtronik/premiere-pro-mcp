@@ -754,13 +754,30 @@ function __availablePropertyNames(component) {
   if (total > limit) summary += " (first " + limit + " of " + total + ")";
   return summary;
 }
+// CLAUDE-NOTE (hoodtronik fork, 2026-11-09, ported 2026-11-18; Dehancer Pro 7.4 in Premiere 26.5): big third-party
+// effects repeat property names (13x "Enabled", 9x "Profile"). A section starts at a named property that follows an
+// empty-named separator (or at index 0), so "Section/Name" (e.g. "Film Grain/Amount") names one property exactly.
+function __propertyPaths(component) {
+  var out = [];
+  var section = "";
+  for (var p = 0; p < component.properties.numItems; p++) {
+    var name = "";
+    var previous = "";
+    try { name = String(component.properties[p].displayName || ""); } catch (eName) {}
+    try { previous = p > 0 ? String(component.properties[p - 1].displayName || "") : ""; } catch (ePrevious) {}
+    if (name !== "" && (p === 0 || previous === "")) section = name;
+    out.push({ index: p, section: section, path: (section && section !== name) ? section + "/" + name : name });
+  }
+  return out;
+}
 function __resolveProperty(component, wanted, propertyIndex) {
   var matches = [];
+  var paths = String(wanted).indexOf("/") >= 0 ? __propertyPaths(component) : null;
   if (propertyIndex !== null && propertyIndex !== undefined) {
     if (typeof propertyIndex !== "number" || !isFinite(propertyIndex) || Math.floor(propertyIndex) !== propertyIndex || propertyIndex < 0 || propertyIndex >= component.properties.numItems) {
       return { property: null, index: null, candidates: [], error: "property_index is out of range. Available properties: " + __availablePropertyNames(component) + "." };
     }
-    if (!__propertyNameMatches(component.properties[propertyIndex].displayName, wanted, component)) {
+    if (!__propertyNameMatches(component.properties[propertyIndex].displayName, wanted, component) && !(paths && paths[propertyIndex].path === String(wanted))) {
       return { property: null, index: null, candidates: [], error: "property_index " + propertyIndex + " does not match property name '" + wanted + "'. Available properties: " + __availablePropertyNames(component) + "." };
     }
     return { property: component.properties[propertyIndex], index: propertyIndex, candidates: [propertyIndex], error: null };
@@ -768,8 +785,14 @@ function __resolveProperty(component, wanted, propertyIndex) {
   for (var i = 0; i < component.properties.numItems; i++) {
     if (__propertyNameMatches(component.properties[i].displayName, wanted, component)) matches.push(i);
   }
+  if (!matches.length && paths) {
+    for (var pi = 0; pi < paths.length; pi++) if (paths[pi].path === String(wanted)) matches.push(pi);
+  }
   if (matches.length > 1) {
-    return { property: null, index: null, candidates: matches, error: "Property name '" + wanted + "' is ambiguous at property indices [" + matches.join(", ") + "]; pass property_index. Available properties: " + __availablePropertyNames(component) + "." };
+    var allPaths = __propertyPaths(component);
+    var candidatePaths = [];
+    for (var cp = 0; cp < matches.length; cp++) candidatePaths.push(allPaths[matches[cp]].path + " [" + matches[cp] + "]");
+    return { property: null, index: null, candidates: matches, error: "Property name '" + wanted + "' is ambiguous at property indices [" + matches.join(", ") + "]; pass property_index. Available properties: " + __availablePropertyNames(component) + ". A 'Section/Name' path also selects one: " + candidatePaths.join(", ") + "." };
   }
   if (!matches.length) return { property: null, index: null, candidates: [], error: "Property name '" + wanted + "' not found. Available properties: " + __availablePropertyNames(component) + "." };
   return { property: component.properties[matches[0]], index: matches[0], candidates: matches, error: null };

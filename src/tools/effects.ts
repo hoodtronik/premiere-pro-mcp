@@ -1,5 +1,6 @@
 import { buildToolScript, escapeForExtendScript } from "../bridge/script-builder.js";
 import { sendCommand, BridgeOptions } from "../bridge/file-bridge.js";
+import { resolveEffectDisplayName } from "./effect-resolve.js";
 
 const LUMETRI_SECTION_HEADER_NAMES = [
   "Basic Correction",
@@ -81,10 +82,26 @@ function applyEffectWithReadback(kind: "Video" | "Audio"): string {
   `;
 }
 
+// CLAUDE-NOTE (hoodtronik fork, 2026-11-09, ported to 1.31 on 2026-11-18): third-party effects register fragile display names
+// (Dehancer = "Dehancer Pro  v7.4.0": two spaces, version in the name) but a stable matchName ("AE.Dehancer v7"). The catalog
+// scan therefore also accepts a spacing/case-insensitive name; matchNames are mapped host-side by resolveEffectDisplayName.
+// Expects effectCatalog, effectName and qeEffect in scope; sets effectName to the catalog's exact name on a loose match.
+function qeVideoCatalogMatch(): string {
+  return `var effects = effectCatalog.effects;
+            var wantedLoose = String(effectName).replace(/\\s+/g, " ").toLowerCase();
+            for (var i = 0; i < effects.numItems; i++) {
+              if (effects[i].name === effectName || String(effects[i].name).replace(/\\s+/g, " ").toLowerCase() === wantedLoose) {
+                effectName = String(effects[i].name);
+                qeEffect = __qeEffectObject("video", effects[i]);
+                break;
+              }
+            }`;
+}
+
 export function getEffectsTools(bridgeOptions: BridgeOptions) {
   return {
     apply_effect: {
-      description: "Apply a video effect to a clip. Experimental QE DOM catalog lookup includes an exact-name probe when enumeration is empty. A component-list readback does not verify rendered pixels.",
+      description: "Apply a video effect to a clip. effect_name may be the display name (spacing- and case-insensitive) or the effect matchName (e.g. 'AE.Dehancer v7'); a matchName is resolved to the current display name from Premiere's plugin cache. Experimental QE DOM catalog lookup includes an exact-name probe when enumeration is empty. A component-list readback does not verify rendered pixels.",
       parameters: {
         type: "object" as const,
         properties: {
@@ -94,12 +111,13 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           },
           effect_name: {
             type: "string",
-            description: "Name of the effect (e.g., 'Gaussian Blur', 'Lumetri Color')",
+            description: "Effect display name (e.g. 'Gaussian Blur') or matchName (e.g. 'AE.Dehancer v7')",
           },
         },
         required: ["node_id", "effect_name"],
       },
       handler: async (args: { node_id: string; effect_name: string }) => {
+        const resolved = await resolveEffectDisplayName(args.effect_name);
         const script = buildToolScript(`
           app.enableQE();
           var qeSeq = qe.project.getActiveSequence();
@@ -109,7 +127,7 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           if (!result) return __refuse("Clip not found: ${escapeForExtendScript(args.node_id)}");
           
           // Find the effect in QE
-          var effectName = "${escapeForExtendScript(args.effect_name)}";
+          var effectName = "${escapeForExtendScript(resolved.name)}";
           var qeTrack = result.trackType === "video" 
             ? qeSeq.getVideoTrackAt(result.trackIndex)
             : qeSeq.getAudioTrackAt(result.trackIndex);
@@ -129,13 +147,7 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           if (!qeEffect) {
             var effectCatalog = __getQeEffectCatalog("video");
             if (!effectCatalog.ok) return __error(effectCatalog.error + " Direct QE lookup for \\"" + effectName + "\\" also did not resolve an effect.");
-            var effects = effectCatalog.effects;
-            for (var i = 0; i < effects.numItems; i++) {
-              if (effects[i].name === effectName) {
-                qeEffect = __qeEffectObject("video", effects[i]);
-                break;
-              }
-            }
+            ${qeVideoCatalogMatch()}
           }
           if (!qeEffect) return __error("Effect not found: " + effectName);
           ${applyEffectWithReadback("Video")}
@@ -249,6 +261,37 @@ export function getEffectsTools(bridgeOptions: BridgeOptions) {
           if (removal.failures.length) return __error("Premiere could not remove " + effectName + " from this clip; it is still present. Inspect Effect Controls.");
           if (!removal.verified) return __error((removal.remaining.join("|") === removal.before.join("|") ? "Premiere's removal did not take effect: the clip still has " : "Premiere's removal did not take effect as expected: the clip's components read back as ") + removal.remaining.join(", ") + ". Inspect Effect Controls.");
           return __result({ removed: true, verified: true, effect: effectName, remaining: removal.remaining });
+        `);
+        return sendCommand(script, bridgeOptions);
+      },
+    },
+
+    // CLAUDE-NOTE (hoodtronik fork, 2026-11-09, ported 2026-11-18): read-only lookup check, so a caller can tell
+    // "QE cannot resolve this effect name" apart from "the add itself failed" before touching a clip.
+    probe_effect: {
+      description: "Read-only: check whether Premiere's QE layer resolves a video effect (display name, spacing-insensitive, or matchName such as 'AE.Dehancer v7') without applying it. Reports the resolved display name and lookup path.",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          effect_name: { type: "string", description: "Effect display name or matchName" },
+        },
+        required: ["effect_name"],
+      },
+      handler: async (args: { effect_name: string }) => {
+        const resolved = await resolveEffectDisplayName(args.effect_name);
+        const script = buildToolScript(`
+          app.enableQE();
+          var effectName = "${escapeForExtendScript(resolved.name)}";
+          var qeEffect = null;
+          try { qeEffect = qe.project.getVideoEffectByName(effectName); } catch (byNameError) {}
+          var lookupSource = qeEffect ? "qe.byName" : "qe.catalog";
+          if (!qeEffect) {
+            var effectCatalog = __getQeEffectCatalog("video");
+            if (!effectCatalog.ok) return __refuse(effectCatalog.error + " Direct QE lookup for \\"" + effectName + "\\" also did not resolve an effect.");
+            ${qeVideoCatalogMatch()}
+          }
+          if (!qeEffect) return __refuse("Effect not found: " + effectName);
+          return __result({ found: true, effect: effectName, requested: "${escapeForExtendScript(args.effect_name)}", resolvedVia: "${escapeForExtendScript(resolved.via)}", matchName: "${escapeForExtendScript(resolved.matchName ?? "")}", lookupSource: lookupSource });
         `);
         return sendCommand(script, bridgeOptions);
       },

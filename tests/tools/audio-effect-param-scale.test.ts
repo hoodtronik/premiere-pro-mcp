@@ -86,7 +86,7 @@ describe("audio effect parameter scale on get_effect_properties", () => {
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({ trackType: "audio", builtInComponent: false, parameterScale: { kind: "normalized_0_1", basis: "inferred", documentedMapping: false } });
     expect(result.data.warnings).toEqual([AUDIO_EFFECT_SCALE_WARNING, HIGHPASS_DEFAULT_WARNING]);
-    expect(result.data.properties[0]).toEqual({ index: 0, displayName: "Bypass", isTimeVarying: false, keyframesSupported: true, value: false });
+    expect(result.data.properties[0]).toEqual({ index: 0, displayName: "Bypass", section: "Bypass", path: "Bypass", isTimeVarying: false, keyframesSupported: true, value: false });
     expect(result.data.properties[1]).toMatchObject({ displayName: "Cutoff", value: 0.25, valueScale: "normalized_0_1", measuredGuidance: HIGHPASS_CUTOFF_MEASUREMENTS });
     expect(result.data.properties[1]).not.toHaveProperty("displayValue");
     expect(result.data.properties[1]).not.toHaveProperty("displayUnits");

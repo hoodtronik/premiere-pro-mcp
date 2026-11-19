@@ -1532,7 +1532,7 @@ export function getUtilityTools(bridgeOptions: BridgeOptions, dependencies: Util
 
     get_clip_links: {
       description:
-        "Get information about linked clips (audio/video linked together) for a given clip.",
+        "Get the clips linked to a given clip. linkedClips comes from Premiere's real link group (getLinkedItems), so audio from another file that was linked to the clip is included. sameSourceClips lists other clips of the same source starting at the same time (the old heuristic).",
       parameters: {
         type: "object" as const,
         properties: {
@@ -1590,8 +1590,35 @@ export function getUtilityTools(bridgeOptions: BridgeOptions, dependencies: Util
           findLinked(seq.videoTracks, "video");
           findLinked(seq.audioTracks, "audio");
 
-          info.linkedClips = linked;
-          info.linkedCount = linked.length;
+          // CLAUDE-NOTE (hoodtronik fork, 2026-11-18): the same-source/same-start heuristic never reports a linked WAV
+          // from another file (the case link_clips_by_start exists for), so linkedClips now reads Premiere's real link
+          // group and the heuristic moves to sameSourceClips.
+          var real = [];
+          var linkGroupReadable = true;
+          var group = null;
+          try { group = clip.getLinkedItems(); } catch (groupError) { linkGroupReadable = false; }
+          for (var g = 0; group && g < group.numItems; g++) {
+            var member = group[g];
+            if (String(member.nodeId) === String(clip.nodeId)) continue;
+            var memberType = "unknown", memberTrack = -1;
+            try {
+              var located = __findClip(String(member.nodeId));
+              if (located) { memberType = located.trackType; memberTrack = located.trackIndex; }
+            } catch (locateError) {}
+            real.push({
+              nodeId: member.nodeId,
+              name: member.name,
+              trackType: memberType,
+              trackIndex: memberTrack,
+              startSeconds: __ticksToSeconds(member.start.ticks),
+              endSeconds: __ticksToSeconds(member.end.ticks)
+            });
+          }
+
+          info.linkedClips = real;
+          info.linkedCount = real.length;
+          info.linkGroupReadable = linkGroupReadable;
+          info.sameSourceClips = linked;
 
           return __result(info);
         `);

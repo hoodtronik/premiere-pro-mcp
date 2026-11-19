@@ -996,6 +996,91 @@ export function getAdvancedTools(
       },
     },
 
+    // CLAUDE-NOTE (hoodtronik fork, 2026-11-14, ported 2026-11-18): FCP XML import drops <link> groups between a video
+    // clip and audio from OTHER files, and relinking a long cut through set_clip_selection + link_selection is ~1,000
+    // calls. This links every clip on one video track to the time-matched clips on the listed audio tracks in one call
+    // and reads every group back with getLinkedItems() (a group counts only when each member lists all the others).
+    link_clips_by_start: {
+      description:
+        "In the active sequence, link each clip on a video track to the clips on the given audio tracks that start and end at the same time (one link group per video clip), then read every group back. Groups already linked are left alone. verified is true only when every matched group reads back linked.",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          video_track_index: { type: "integer", minimum: 0, description: "Video track index (0-based, default 0)" },
+          audio_track_indices: {
+            type: "array",
+            items: { type: "integer", minimum: 0 },
+            minItems: 1,
+            description: "Audio track indices (0-based) whose time-matched clips join each video clip's link group",
+          },
+          tolerance_seconds: { type: "number", minimum: 0, maximum: 1, description: "Start/end match tolerance in seconds (default 0.02)" },
+        },
+        required: ["audio_track_indices"],
+      },
+      handler: async (args: { video_track_index?: number; audio_track_indices: number[]; tolerance_seconds?: number }) => {
+        const vIdx = args.video_track_index ?? 0;
+        const aIdx = Array.isArray(args.audio_track_indices) ? args.audio_track_indices : [];
+        const tol = args.tolerance_seconds ?? 0.02;
+        if (!Number.isInteger(vIdx) || vIdx < 0) return { success: false as const, error: "video_track_index must be a non-negative integer" };
+        if (!aIdx.length || aIdx.some((n) => !Number.isInteger(n) || n < 0)) return { success: false as const, error: "audio_track_indices must be a non-empty list of non-negative integers" };
+        if (typeof tol !== "number" || !isFinite(tol) || tol < 0 || tol > 1) return { success: false as const, error: "tolerance_seconds must be between 0 and 1" };
+        const script = buildToolScript(`
+          var seq = app.project.activeSequence;
+          if (!seq) return __refuse("No active sequence");
+          var aIdx = [${aIdx.join(",")}];
+          var tol = ${tol};
+          if (${vIdx} >= seq.videoTracks.numTracks) return __refuse("video_track_index ${vIdx} is out of range (" + seq.videoTracks.numTracks + " video tracks). Nothing was changed.");
+          for (var q = 0; q < aIdx.length; q++) { if (aIdx[q] >= seq.audioTracks.numTracks) return __refuse("audio track index " + aIdx[q] + " is out of range (" + seq.audioTracks.numTracks + " audio tracks). Nothing was changed."); }
+          function deselectAll() {
+            var groupsAll = [seq.videoTracks, seq.audioTracks];
+            for (var ga = 0; ga < groupsAll.length; ga++) for (var gt = 0; gt < groupsAll[ga].numTracks; gt++) for (var gc = 0; gc < groupsAll[ga][gt].clips.numItems; gc++) { try { groupsAll[ga][gt].clips[gc].setSelected(false, true); } catch (deselectError) {} }
+          }
+          function linkedToAll(clip, ids) {
+            var linked = null;
+            try { linked = clip.getLinkedItems(); } catch (linkedError) { return false; }
+            if (!linked) return false;
+            var have = {};
+            for (var li = 0; li < linked.numItems; li++) have[String(linked[li].nodeId)] = true;
+            for (var ii = 0; ii < ids.length; ii++) if (ids[ii] !== String(clip.nodeId) && !have[ids[ii]]) return false;
+            return true;
+          }
+          var vt = seq.videoTracks[${vIdx}];
+          var matchedGroups = 0, linkedGroups = 0, alreadyLinked = 0, unmatched = [], failures = [];
+          for (var i = 0; i < vt.clips.numItems; i++) {
+            var v = vt.clips[i];
+            var s = v.start.seconds, e = v.end.seconds;
+            var members = [v], ids = [String(v.nodeId)];
+            for (var k = 0; k < aIdx.length; k++) {
+              var at = seq.audioTracks[aIdx[k]];
+              for (var j = 0; j < at.clips.numItems; j++) {
+                var a = at.clips[j];
+                if (Math.abs(a.start.seconds - s) <= tol && Math.abs(a.end.seconds - e) <= tol) { members.push(a); ids.push(String(a.nodeId)); }
+              }
+            }
+            if (members.length < 2) { unmatched.push(String(v.name)); continue; }
+            matchedGroups++;
+            var already = true;
+            for (var m = 0; m < members.length; m++) if (!linkedToAll(members[m], ids)) already = false;
+            if (already) { alreadyLinked++; continue; }
+            try {
+              // linkSelection links every selected clip, so clear the whole sequence first.
+              deselectAll();
+              for (m = 0; m < members.length; m++) members[m].setSelected(true, true);
+              seq.linkSelection();
+            } catch (linkError) { failures.push(String(v.name) + ": " + linkError.toString()); continue; }
+            var linkedNow = true;
+            for (m = 0; m < members.length; m++) if (!linkedToAll(members[m], ids)) linkedNow = false;
+            if (linkedNow) linkedGroups++; else failures.push(String(v.name) + " did not read back linked");
+          }
+          deselectAll();
+          var summary = { videoClips: vt.clips.numItems, matchedGroups: matchedGroups, linkedGroups: linkedGroups, alreadyLinked: alreadyLinked, unmatched: unmatched, failures: failures, verified: failures.length === 0 && matchedGroups > 0, outcome: failures.length ? "failed" : "verified" };
+          if (failures.length) return __jsonStringify({ success: false, error: "Premiere did not link " + failures.length + " of " + matchedGroups + " matched group(s): " + failures.slice(0, 10).join("; "), data: summary });
+          return __result(summary);
+        `);
+        return sendCommand(script, bridgeOptions);
+      },
+    },
+
     unlink_selection: {
       description:
         "Unlink the currently selected video and audio clips in the active sequence, then read the links back. Premiere only unlinks when every clip of a linked group is selected, so a selection missing a linked partner is refused before anything changes.",
