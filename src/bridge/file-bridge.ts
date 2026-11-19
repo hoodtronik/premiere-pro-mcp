@@ -30,6 +30,15 @@ export function getDefaultBridgeTempDir(
   readDarwinUserTempDirectory: () => string | null = getDarwinUserTempDirectory,
   environment: NodeJS.ProcessEnv = process.env,
 ): string {
+  // CLAUDE-NOTE (fork, 2026-11-18): on Windows the default is the PRIVATE per-user
+  // %LOCALAPPDATA%\premiere-mcp-bridge, not %TEMP%. v1.31 refuses the world-writable
+  // %TEMP% folder, and any process that started without PREMIERE_TEMP_DIR (a Claude
+  // session spawned before the env var, an agent-launched Premiere) silently split the
+  // bridge across two folders. The CEP panel (cep-plugin/main.js) uses the same default,
+  // so both sides agree with or without the env var.
+  if (platform === "win32" && environment.LOCALAPPDATA) {
+    return join(environment.LOCALAPPDATA, "premiere-mcp-bridge");
+  }
   const hasConfiguredNodeTempDirectory = Boolean(
     environment.TMPDIR || environment.TMP || environment.TEMP,
   );

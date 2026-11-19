@@ -143,7 +143,12 @@ describe("getTempDir", () => {
   it("returns default when no options or env", () => {
     delete process.env.PREMIERE_TEMP_DIR;
     const result = getTempDir();
-    expect(result).toBe(join(tmpdir(), "premiere-mcp-bridge"));
+    expect(result).toBe(getDefaultBridgeTempDir());
+  });
+
+  it("uses the private per-user LOCALAPPDATA folder on Windows, never %TEMP%", () => {
+    expect(getDefaultBridgeTempDir("win32", "C:/Temp", () => null, { LOCALAPPDATA: "C:/Users/x/AppData/Local", TEMP: "C:/Temp" }).replaceAll("\\", "/"))
+      .toBe("C:/Users/x/AppData/Local/premiere-mcp-bridge");
   });
 
   it("uses the Darwin per-user temporary root when a GUI client omits TMPDIR", () => {

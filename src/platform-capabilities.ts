@@ -1,6 +1,5 @@
+import { getDefaultBridgeTempDir } from "./bridge/file-bridge.js";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Capability, CapabilityConfig } from "./security/capabilities.js";
 import {
   buildToolCapabilityReport,
@@ -214,7 +213,7 @@ export function platformName(platform: NodeJS.Platform): string {
 export function buildPlatformCapabilityReport(
   capabilities: CapabilityConfig,
   platform: NodeJS.Platform = process.platform,
-  tempDirectory: string = join(tmpdir(), "premiere-mcp-bridge"),
+  tempDirectory: string = getDefaultBridgeTempDir(platform),
   toolCatalog: Record<string, CatalogToolDefinition> = {},
   toolPacks?: ToolPackReport,
 ) {

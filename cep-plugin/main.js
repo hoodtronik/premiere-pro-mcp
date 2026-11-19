@@ -123,6 +123,15 @@ function defaultBridgeDirectory() {
   } catch (e) {
     // The panel still has a safe OS temporary-directory fallback.
   }
+  // CLAUDE-NOTE (fork, 2026-11-18): Windows default = private %LOCALAPPDATA%\premiere-mcp-bridge,
+  // matching the server's getDefaultBridgeTempDir, so a Premiere launched without
+  // PREMIERE_TEMP_DIR still meets the server (v1.31 refuses world-writable %TEMP%).
+  try {
+    var np = nodeRequire("process");
+    if (os.platform() === "win32" && np && np.env && np.env.LOCALAPPDATA) {
+      return path.join(np.env.LOCALAPPDATA, "premiere-mcp-bridge");
+    }
+  } catch (e2) {}
   return path.join(os.tmpdir(), "premiere-mcp-bridge");
 }
 tempDir = defaultBridgeDirectory();
