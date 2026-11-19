@@ -1059,15 +1059,48 @@ export function getAdvancedTools(
             }
             if (members.length < 2) { unmatched.push(String(v.name)); continue; }
             matchedGroups++;
+            // CLAUDE-NOTE (hoodtronik fork, measured live on Premiere 26.5.2, 2026-11-18): linkSelection()
+            // silently does nothing when a selected clip already belongs to another link group (e.g. a
+            // video clip with its own linked audio). Pull every existing partner into the group, unlink
+            // the whole union first (unlinkSelection needs every member of a group selected), then link
+            // the union. If the relink fails, the original groups are restored.
+            var originalGroups = [];
+            var baseCount = members.length;
+            for (var bm = 0; bm < baseCount; bm++) {
+              var partners = null;
+              try { partners = members[bm].getLinkedItems(); } catch (partnerError) { partners = null; }
+              if (!partners || partners.numItems < 2) continue;
+              var groupIds = [];
+              for (var pi = 0; pi < partners.numItems; pi++) {
+                var pc = partners[pi], pid = String(pc.nodeId);
+                groupIds.push(pc);
+                var seen = false;
+                for (var mi2 = 0; mi2 < ids.length; mi2++) if (ids[mi2] === pid) { seen = true; break; }
+                if (!seen) { members.push(pc); ids.push(pid); }
+              }
+              originalGroups.push(groupIds);
+            }
             var already = true;
             for (var m = 0; m < members.length; m++) if (!linkedToAll(members[m], ids)) already = false;
             if (already) { alreadyLinked++; continue; }
             try {
               // linkSelection links every selected clip, so clear the whole sequence first.
+              if (originalGroups.length) {
+                deselectAll();
+                for (m = 0; m < members.length; m++) members[m].setSelected(true, true);
+                seq.unlinkSelection();
+              }
               deselectAll();
               for (m = 0; m < members.length; m++) members[m].setSelected(true, true);
               seq.linkSelection();
             } catch (linkError) { failures.push(String(v.name) + ": " + linkError.toString()); continue; }
+            var relinkCheck = true;
+            for (m = 0; m < members.length; m++) if (!linkedToAll(members[m], ids)) relinkCheck = false;
+            if (!relinkCheck && originalGroups.length) {
+              for (var og = 0; og < originalGroups.length; og++) {
+                try { deselectAll(); for (var oc = 0; oc < originalGroups[og].length; oc++) originalGroups[og][oc].setSelected(true, true); seq.linkSelection(); } catch (restoreError) {}
+              }
+            }
             var linkedNow = true;
             for (m = 0; m < members.length; m++) if (!linkedToAll(members[m], ids)) linkedNow = false;
             if (linkedNow) linkedGroups++; else failures.push(String(v.name) + " did not read back linked");
